@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mi Agenda</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body{font-family:Georgia,"Times New Roman",serif}
+  .ui{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+  .card{background:#fff;border:1px solid #e2e0d9;border-radius:14px;padding:14px}
+  .num{min-height:40px;border-radius:10px;border:1px solid #d6d3c8;font-family:system-ui,sans-serif}
+  .num.on{background:#1f3a34;color:#fff;border-color:#1f3a34}
+  button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #1f3a34;outline-offset:2px}
+</style>
+</head>
+<body class="bg-[#f3f2ed] text-stone-800 min-h-screen">
+<div class="max-w-6xl mx-auto p-3 sm:p-5 space-y-3">
+
+  <header class="flex items-center justify-between ui">
+    <button onclick="go(-1)" class="w-11 h-11 rounded-full bg-white border text-xl" aria-label="Día anterior">‹</button>
+    <div class="text-center">
+      <h1 id="fecha" class="text-lg font-semibold capitalize"></h1>
+      <button onclick="go(0)" class="text-xs text-emerald-800 underline">Ir a hoy</button>
+    </div>
+    <button onclick="go(1)" class="w-11 h-11 rounded-full bg-white border text-xl" aria-label="Día siguiente">›</button>
+  </header>
+
+  <section id="banner" class="rounded-2xl p-4 bg-[#1f3a34] text-[#f3f2ed]"></section>
+  <section id="registro" class="card ui"></section>
+
+  <main class="grid lg:grid-cols-2 gap-3 items-start">
+    <section class="card ui">
+      <h2 class="font-semibold mb-2">Itinerario</h2>
+      <div id="lista" class="space-y-2"></div>
+      <details class="mt-3">
+        <summary class="cursor-pointer text-sm text-emerald-800 py-2">+ Agregar bloque</summary>
+        <div class="grid grid-cols-2 gap-2 mt-2">
+          <input id="b-act" placeholder="Actividad" class="col-span-2 border rounded-lg p-2">
+          <input id="b-pi" type="time" class="border rounded-lg p-2">
+          <input id="b-pf" type="time" class="border rounded-lg p-2">
+          <select id="b-tipo" class="border rounded-lg p-2"><option>Evento</option><option>Rutina</option></select>
+          <button onclick="addBloque()" class="bg-[#1f3a34] text-white rounded-lg p-2">Agregar</button>
+        </div>
+      </details>
+    </section>
+
+    <div class="space-y-3 ui">
+      <section class="card">
+        <h2 class="font-semibold mb-2">Pendientes</h2>
+        <div class="grid grid-cols-[1fr_auto] gap-2 mb-2">
+          <input id="p-tarea" placeholder="Nueva tarea" class="border rounded-lg p-2" onkeydown="if(event.key==='Enter')addPend()">
+          <button onclick="addPend()" class="bg-[#1f3a34] text-white rounded-lg px-4">Agregar</button>
+          <div class="col-span-2 grid grid-cols-2 gap-2">
+            <select id="p-prio" class="border rounded-lg p-2"><option>Media</option><option>Alta</option><option>Baja</option></select>
+            <input id="p-cat" placeholder="Categoría" class="border rounded-lg p-2">
+          </div>
+        </div>
+        <div id="pend" class="space-y-1"></div>
+      </section>
+
+      <section class="card">
+        <h2 class="font-semibold mb-2">Notas e ideas</h2>
+        <input id="n-in" placeholder="Escribe y presiona Enter" class="w-full border rounded-lg p-2" onkeydown="if(event.key==='Enter')addNota()">
+        <ul id="notas" class="mt-2 space-y-1 list-disc pl-5"></ul>
+      </section>
+    </div>
+  </main>
+</div>
+<div id="sync" class="ui fixed bottom-3 right-3 text-xs bg-white border rounded-full px-3 py-1 hidden"></div>
+
+<script>
+const API = 'PEGA_AQUI_LA_URL_DE_TU_WEB_APP';   // termina en /exec
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+const hhmm = () => new Date().toTimeString().slice(0, 5);
+const shift = (f, n) => { const d = new Date(f + 'T12:00'); d.setDate(d.getDate() + n); return iso(d); };
+
+let fecha = iso(new Date()), D = null, busy = 0, adj = {};
+
+/* ---------- red: fetch asíncrono, sin bloquear la UI ---------- */
+function syncUI() {
+  const el = $('#sync'); el.classList.toggle('hidden', !busy);
+  el.textContent = 'Guardando…';
+}
+async function save(body) {            // text/plain => petición "simple", sin preflight CORS
+  busy++; syncUI();
+  try {
+    const r = await fetch(API, { method: 'POST', body: JSON.stringify(body) });
+    const j = await r.json(); if (!j.ok) throw new Error(j.error);
+    return j;
+  } catch (e) { alert('No se pudo guardar: ' + e.message); return null; }
+  finally { busy--; syncUI(); }
+}
+async function load() {
+  $('#fecha').textContent = new Date(fecha + 'T12:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+  $('#lista').innerHTML = '<p class="text-sm text-stone-500">Cargando…</p>';
+  try {
+    const r = await fetch(`${API}?action=getDay&fecha=${fecha}`);
+    D = await r.json(); if (!D.ok) throw new Error(D.error);
+    adj = {}; render();
+  } catch (e) { $('#lista').innerHTML = `<p class="text-sm text-red-700">Error al cargar: ${esc(e.message)}</p>`; }
+}
+function go(n) { fecha = n === 0 ? iso(new Date()) : shift(fecha, n); load(); }
+
+/* ---------- render ---------- */
+function render() {
+  const R = D.registro;
+  $('#banner').innerHTML = `<p class="text-lg leading-snug">${esc(R.frase)}</p><p class="mt-2 text-sm italic opacity-80">${esc(R.versiculo)}</p>`;
+
+  const row = (k, label) => `<div class="mb-3"><p class="text-sm mb-1">${label}</p><div class="grid grid-cols-5 sm:grid-cols-10 gap-1">` +
+    [1,2,3,4,5,6,7,8,9,10].map(n => `<button class="num ${R[k] === n ? 'on' : ''}" onclick="pick('${k}',${n})">${n}</button>`).join('') + '</div></div>';
+  $('#registro').innerHTML = (R.energia !== '' && R.enfoque !== '' && !R.edit)
+    ? `<div class="flex items-center justify-between text-sm"><span>Energía <b>${R.energia}</b>/10 · Enfoque <b>${R.enfoque}</b>/10</span><button class="underline text-emerald-800" onclick="D.registro.edit=true;render()">Cambiar</button></div>`
+    : `<h2 class="font-semibold mb-2">¿Cómo arrancas hoy?</h2>${row('energia', 'Nivel de energía')}${row('enfoque', 'Nivel de enfoque')}`;
+
+  const ag = D.agenda.slice().sort((a, b) => a.pi.localeCompare(b.pi));
+  $('#lista').innerHTML = ag.length ? ag.map(b => {
+    const i = D.agenda.indexOf(b);
+    return `<div class="border rounded-xl p-3 ${b.estado ? 'bg-emerald-50 border-emerald-200' : ''}">
+      <div class="flex items-center gap-3">
+        <button onclick="toggleB(${i})" class="shrink-0 w-11 h-11 rounded-full border-2 ${b.estado ? 'bg-[#1f3a34] border-[#1f3a34] text-white' : 'border-stone-400'}" aria-label="Completar">${b.estado ? '✓' : ''}</button>
+        <div class="flex-1 min-w-0">
+          <p class="font-medium ${b.estado ? 'line-through text-stone-500' : ''}">${esc(b.actividad)} <span class="text-xs text-stone-500">${esc(b.tipo)}</span></p>
+          <p class="text-xs text-stone-600">Plan ${b.pi}–${b.pf}${b.ri || b.rf ? ` · Real ${b.ri || '--'}–${b.rf || '--'}` : ''}</p>
+        </div>
+        <button onclick="adj[${i}]=!adj[${i}];render()" class="text-xs underline text-emerald-800 p-2">Ajustar</button>
+      </div>
+      ${adj[i] ? `<div class="flex gap-2 mt-2"><input id="ri${i}" type="time" value="${b.ri}" class="border rounded-lg p-2 flex-1"><input id="rf${i}" type="time" value="${b.rf}" class="border rounded-lg p-2 flex-1"><button onclick="ajustar(${i})" class="bg-[#1f3a34] text-white rounded-lg px-3">Guardar</button></div>` : ''}
+    </div>`;
+  }).join('') : '<p class="text-sm text-stone-500">Sin bloques. Agrega el primero abajo.</p>';
+
+  const ord = { Alta: 0, Media: 1, Baja: 2 };
+  const P = D.pendientes.slice().sort((a, b) => a.completado - b.completado || ord[a.prioridad] - ord[b.prioridad]);
+  const col = { Alta: 'text-red-700', Media: 'text-amber-700', Baja: 'text-stone-500' };
+  $('#pend').innerHTML = P.length ? P.map(p => `<div class="flex items-center gap-2 py-1">
+      <input type="checkbox" class="w-5 h-5" ${p.completado ? 'checked' : ''} onchange="togP('${p.id}',this.checked)">
+      <span class="flex-1 ${p.completado ? 'line-through text-stone-500' : ''}">${esc(p.tarea)}
+        <span class="text-xs ${col[p.prioridad] || ''}">${esc(p.prioridad)}${p.categoria ? ' · ' + esc(p.categoria) : ''}${p.fecha && p.fecha < fecha ? ' · vencida' : ''}</span></span>
+      ${p.completado ? '' : `<button onclick="movP('${p.id}')" class="text-xs underline text-emerald-800 p-2">Pasar a mañana</button>`}
+    </div>`).join('') : '<p class="text-sm text-stone-500">Nada pendiente.</p>';
+
+  $('#notas').innerHTML = D.notas.map(n => `<li><span class="text-xs text-stone-500">${n.hora}</span> ${esc(n.nota)}</li>`).join('');
+}
+
+/* ---------- acciones (UI optimista: primero pinta, luego guarda) ---------- */
+function pick(k, v) {
+  const R = D.registro; R[k] = v; R.edit = false;
+  render();
+  if (R.energia !== '' && R.enfoque !== '') save({ action: 'setRegistro', fecha, energia: R.energia, enfoque: R.enfoque });
+}
+function toggleB(i) {
+  const b = D.agenda[i];
+  if (!b.estado) { b.estado = true; b.ri = b.ri || b.pi; b.rf = hhmm(); }
+  else { b.estado = false; b.ri = ''; b.rf = ''; }
+  render(); save({ action: 'setBloque', row: b.row, ri: b.ri, rf: b.rf, estado: b.estado });
+}
+function ajustar(i) {
+  const b = D.agenda[i]; b.ri = $('#ri' + i).value; b.rf = $('#rf' + i).value; b.estado = !!b.rf; adj[i] = false;
+  render(); save({ action: 'setBloque', row: b.row, ri: b.ri, rf: b.rf, estado: b.estado });
+}
+async function addBloque() {
+  const act = $('#b-act').value.trim(), pi = $('#b-pi').value, pf = $('#b-pf').value;
+  if (!act || !pi || !pf) return alert('Completa actividad, hora de inicio y fin.');
+  const b = { fecha, actividad: act, tipo: $('#b-tipo').value, pi, pf, ri: '', rf: '', estado: false };
+  const r = await save({ action: 'addBloque', ...b });
+  if (r) { b.row = r.row; D.agenda.push(b); $('#b-act').value = ''; render(); }
+}
+function addPend() {
+  const t = $('#p-tarea').value.trim(); if (!t) return;
+  const p = { id: crypto.randomUUID(), tarea: t, fecha, prioridad: $('#p-prio').value, categoria: $('#p-cat').value.trim(), completado: false };
+  D.pendientes.push(p); $('#p-tarea').value = ''; render(); save({ action: 'addPendiente', ...p });
+}
+function togP(id, v) {
+  D.pendientes.find(p => p.id === id).completado = v; render(); save({ action: 'setPendiente', id, completado: v });
+}
+function movP(id) {
+  const p = D.pendientes.find(p => p.id === id); p.fecha = shift(fecha, 1); render(); save({ action: 'setPendiente', id, fecha: p.fecha });
+}
+function addNota() {
+  const t = $('#n-in').value.trim(); if (!t) return;
+  const n = { hora: hhmm(), nota: t }; D.notas.push(n); $('#n-in').value = ''; render();
+  save({ action: 'addNota', fecha, ...n });
+}
+
+load();
+</script>
+</body>
+</html>
