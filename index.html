@@ -28,10 +28,15 @@
     <button onclick="go(-1)" class="w-11 h-11 rounded-full bg-white border text-xl" aria-label="Día anterior">‹</button>
     <div class="text-center">
       <h1 id="fecha" class="text-lg font-semibold capitalize"></h1>
-      <button onclick="go(0)" class="text-xs text-emerald-800 underline">Ir a hoy</button>
+      <div class="flex gap-4 justify-center">
+        <button onclick="go(0)" class="text-xs text-emerald-800 underline p-1">Ir a hoy</button>
+        <button onclick="toggleCal()" class="text-xs text-emerald-800 underline p-1">Calendario</button>
+      </div>
     </div>
     <button onclick="go(1)" class="w-11 h-11 rounded-full bg-white border text-xl" aria-label="Día siguiente">›</button>
   </header>
+
+  <section id="cal" class="card ui hidden"></section>
 
   <section id="banner" class="rounded-2xl p-4 bg-[#1f3a34] text-[#f3f2ed]"></section>
   <section id="registro" class="card ui"></section>
@@ -41,7 +46,7 @@
       <h2 class="font-semibold mb-2">Itinerario</h2>
       <div id="lista" class="space-y-2"></div>
       <details class="mt-3">
-        <summary class="cursor-pointer text-sm text-emerald-800 py-2">+ Agregar bloque</summary>
+        <summary class="cursor-pointer text-sm text-emerald-800 py-2">+ Agregar bloque o evento <span id="b-dia" class="text-stone-500"></span></summary>
         <div class="grid grid-cols-2 gap-2 mt-2">
           <input id="b-act" placeholder="Actividad" class="col-span-2 border rounded-lg p-2">
           <input id="b-pi" type="time" class="border rounded-lg p-2">
@@ -77,7 +82,7 @@
 <div id="sync" class="ui fixed bottom-3 right-3 text-xs bg-white border rounded-full px-3 py-1 hidden"></div>
 
 <script>
-const API = 'https://script.google.com/macros/s/AKfycbxSPQt-P89K5Ne0xMa7BeWu3VCiFoiTUq9NzX1IBWy5-gZD05Jcu-XFfpzUJ4Sb9P6-/exec';
+const API = 'https://script.google.com/macros/s/AKfycby_jIrdVDY-9BqMhJ2pbliOpDUum2w9RI5J_suX_VDYOygrwmGY3QyZJ2Jyk5XNpOrq/exec';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -103,6 +108,7 @@ async function save(body) {            // text/plain => petición "simple", sin 
 }
 async function load() {
   $('#fecha').textContent = new Date(fecha + 'T12:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+  $('#b-dia').textContent = '(' + new Date(fecha + 'T12:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) + ')';
   $('#lista').innerHTML = '<p class="text-sm text-stone-500">Cargando…</p>';
   try {
     const r = await fetch(`${API}?action=getDay&fecha=${fecha}`);
@@ -110,7 +116,43 @@ async function load() {
     adj = {}; render();
   } catch (e) { $('#lista').innerHTML = `<p class="text-sm text-red-700">Error al cargar: ${esc(e.message)}</p>`; }
 }
-function go(n) { fecha = n === 0 ? iso(new Date()) : shift(fecha, n); load(); }
+function go(n) { fecha = n === 0 ? iso(new Date()) : shift(fecha, n); closeCal(); load(); }
+
+/* ---------- calendario mensual ---------- */
+let calOpen = false, calMes = fecha.slice(0, 7), calDatos = {};
+function closeCal() { calOpen = false; $('#cal').classList.add('hidden'); }
+function toggleCal() {
+  calOpen = !calOpen; $('#cal').classList.toggle('hidden', !calOpen);
+  if (calOpen) { calMes = fecha.slice(0, 7); calDatos = {}; drawCal(); loadMes(); }
+}
+function mesShift(n) {
+  const [y, m] = calMes.split('-').map(Number);
+  calMes = iso(new Date(y, m - 1 + n, 1)).slice(0, 7); calDatos = {}; drawCal(); loadMes();
+}
+async function loadMes() {
+  const mes = calMes;
+  try {
+    const r = await fetch(`${API}?action=getMonth&mes=${mes}`); const j = await r.json();
+    if (j.ok && mes === calMes) { calDatos = j.dias; drawCal(); }
+  } catch (e) {}
+}
+function irDia(f) { fecha = f; closeCal(); load(); }
+function drawCal() {
+  const [y, m] = calMes.split('-').map(Number), hoy = iso(new Date());
+  const off = (new Date(y, m - 1, 1).getDay() + 6) % 7, n = new Date(y, m, 0).getDate();
+  let g = ['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(x => `<div class="text-xs text-stone-500 py-1">${x}</div>`).join('') + '<div></div>'.repeat(off);
+  for (let d = 1; d <= n; d++) {
+    const f = `${calMes}-${String(d).padStart(2, '0')}`, i = calDatos[f] || {};
+    const cls = f === fecha ? 'bg-[#1f3a34] text-white border-[#1f3a34]' : f === hoy ? 'border-emerald-800' : 'bg-stone-50 border-transparent';
+    g += `<button onclick="irDia('${f}')" class="h-12 rounded-lg border flex flex-col items-center justify-center ${cls}"><span class="text-sm">${d}</span><span class="flex gap-0.5 h-1.5">${i.e ? '<i class="w-1.5 h-1.5 rounded-full bg-amber-500"></i>' : ''}${i.p ? '<i class="w-1.5 h-1.5 rounded-full bg-sky-500"></i>' : ''}</span></button>`;
+  }
+  $('#cal').innerHTML = `<div class="flex items-center justify-between mb-2">
+    <button onclick="mesShift(-1)" class="w-10 h-10 rounded-full border" aria-label="Mes anterior">‹</button>
+    <h2 class="font-semibold capitalize">${new Date(y, m - 1, 1).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })}</h2>
+    <button onclick="mesShift(1)" class="w-10 h-10 rounded-full border" aria-label="Mes siguiente">›</button></div>
+    <div class="grid grid-cols-7 gap-1 text-center">${g}</div>
+    <p class="text-xs text-stone-500 mt-2"><i class="inline-block w-2 h-2 rounded-full bg-amber-500"></i> Eventos &nbsp; <i class="inline-block w-2 h-2 rounded-full bg-sky-500"></i> Pendientes con fecha. Toca un día para verlo y agregar eventos.</p>`;
+}
 
 /* ---------- render ---------- */
 function render() {
